@@ -1,21 +1,28 @@
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Numerics;
-using Dalamud.Game.ClientState.Actors;
-using Dalamud.Game.ClientState.Actors.Types;
-using Dalamud.Game.ClientState.Actors.Types.NonPlayer;
+using Dalamud.Game.ClientState;
+using Dalamud.Game.ClientState.JobGauge;
+using Dalamud.Game.ClientState.Objects;
+using Dalamud.Game.ClientState.Objects.Enums;
+using Dalamud.Game.ClientState.Objects.Types;
+using Dalamud.Game.Gui;
 using Dalamud.Interface;
-using Dalamud.Plugin;
-using FFXIVClientStructs.FFXIV.Client.Game.Character;
 using FFXIVClientStructs.FFXIV.Component.GUI;
 using ImGuiNET;
 
-namespace DelvUIPlugin.Interface {
+namespace DelvUI.Interface {
     
     public abstract class HudWindow {
         public bool IsVisible = true;
-        protected readonly DalamudPluginInterface PluginInterface;
+        protected readonly ClientState ClientState;
+        protected readonly GameGui GameGui;
+        protected readonly JobGauges JobGauges;
+        protected readonly ObjectTable ObjectTable;
         protected readonly PluginConfiguration PluginConfiguration;
-        private Vector2 _barsize;
+        protected readonly TargetManager TargetManager;
+        
+        private Vector2 _barSize;
 
         public abstract uint JobId { get; }
 
@@ -31,19 +38,29 @@ namespace DelvUIPlugin.Interface {
         protected int ToTBarWidth => PluginConfiguration.ToTBarWidth;        
         protected int FocusBarHeight => PluginConfiguration.FocusBarHeight;
         protected int FocusBarWidth => PluginConfiguration.FocusBarWidth;
-        protected Vector2 BarSize => _barsize;
+        protected Vector2 BarSize => _barSize;
         
-        protected HudWindow(DalamudPluginInterface pluginInterface, PluginConfiguration pluginConfiguration) {
-            PluginInterface = pluginInterface;
+        protected HudWindow(
+            ClientState clientState, 
+            GameGui gameGui,
+            JobGauges jobGauges,
+            ObjectTable objectTable, 
+            PluginConfiguration pluginConfiguration, 
+            TargetManager targetManager 
+            ) {
+            ClientState = clientState;
+            GameGui = gameGui;
+            JobGauges = jobGauges;
+            ObjectTable = objectTable;
             PluginConfiguration = pluginConfiguration;
-            //_barsize = new Vector2(BarWidth, BarHeight);
+            TargetManager = targetManager;
         }
 
         protected virtual void DrawHealthBar() {
-            _barsize = new Vector2(HealthBarWidth, HealthBarHeight);
-            var actor = PluginInterface.ClientState.LocalPlayer;
+            Debug.Assert(ClientState.LocalPlayer != null, "ClientState.LocalPlayer != null");
+            _barSize = new Vector2(HealthBarWidth, HealthBarHeight);
+            var actor = ClientState.LocalPlayer;
             var scale = (float) actor.CurrentHp / actor.MaxHp;
-
             var cursorPos = new Vector2(CenterX - HealthBarWidth - XOffset, CenterY + YOffset);
 
             DrawOutlinedText($"{actor.Name.Abbreviate().Truncate(16)}", new Vector2(cursorPos.X + 5, cursorPos.Y -22));
@@ -57,7 +74,7 @@ namespace DelvUIPlugin.Interface {
             ImGui.SetCursorPos(cursorPos);
             
             if (ImGui.BeginChild("health_bar", BarSize)) {
-                var colors = PluginConfiguration.JobColorMap[PluginInterface.ClientState.LocalPlayer.ClassJob.Id];
+                var colors = PluginConfiguration.JobColorMap[ClientState.LocalPlayer.ClassJob.Id];
                 var drawList = ImGui.GetWindowDrawList();
                 drawList.AddRectFilled(cursorPos, cursorPos + BarSize, colors["background"]);
                 drawList.AddRectFilledMultiColor(
@@ -67,7 +84,7 @@ namespace DelvUIPlugin.Interface {
                 drawList.AddRect(cursorPos, cursorPos + BarSize, 0xFF000000);
 
                 if (ImGui.IsItemClicked()) {
-                    PluginInterface.ClientState.Targets.SetCurrentTarget(actor);
+                    TargetManager.SetTarget(actor);
                 }
                 
             }
@@ -76,34 +93,37 @@ namespace DelvUIPlugin.Interface {
         }
 
         protected virtual void DrawPrimaryResourceBar() {
-            var actor = PluginInterface.ClientState.LocalPlayer;
-            var scale = (float) actor.CurrentMp / actor.MaxMp;
-            var barSize = new Vector2(254, 13);
-            var cursorPos = new Vector2(CenterX - 127, CenterY + YOffset - 27);
+            var actor = ClientState.LocalPlayer;
+
+            if (actor?.CurrentMp != null) {
+                var scale = (float) actor.CurrentMp / actor.MaxMp;
+                var barSize = new Vector2(254, 13);
+                var cursorPos = new Vector2(CenterX - 127, CenterY + YOffset - 27);
             
-            var drawList = ImGui.GetWindowDrawList();
-            drawList.AddRectFilled(cursorPos, cursorPos + barSize, 0x88000000);
-            drawList.AddRectFilledMultiColor(
-                cursorPos, cursorPos + new Vector2(barSize.X * scale, barSize.Y), 
-                0xFFE6CD00, 0xFFD8Df3C, 0xFFD8Df3C, 0xFFE6CD00
-            );
-            drawList.AddRect(cursorPos, cursorPos + barSize, 0xFF000000);
+                var drawList = ImGui.GetWindowDrawList();
+                drawList.AddRectFilled(cursorPos, cursorPos + barSize, 0x88000000);
+                drawList.AddRectFilledMultiColor(
+                    cursorPos, cursorPos + new Vector2(barSize.X * scale, barSize.Y), 
+                    0xFFE6CD00, 0xFFD8Df3C, 0xFFD8Df3C, 0xFFE6CD00
+                );
+                drawList.AddRect(cursorPos, cursorPos + barSize, 0xFF000000);
+            }
         }
         
         protected virtual void DrawTargetBar() {
-            var target = PluginInterface.ClientState.Targets.SoftTarget ?? PluginInterface.ClientState.Targets.CurrentTarget;
+            var target = TargetManager.SoftTarget ?? TargetManager.Target;
 
             if (target is null) {
                 return;
             }
 
-            _barsize = new Vector2(TargetBarWidth, TargetBarHeight);
+            _barSize = new Vector2(TargetBarWidth, TargetBarHeight);
 
             var cursorPos = new Vector2(CenterX + XOffset, CenterY + YOffset);
             ImGui.SetCursorPos(cursorPos);
             var drawList = ImGui.GetWindowDrawList();
 
-            if (!(target is Chara actor)) {
+            if (target is not Character actor) {
                 var friendly = PluginConfiguration.NPCColorMap["friendly"];
                 drawList.AddRectFilled(cursorPos, cursorPos + BarSize, friendly["background"]);
                 drawList.AddRectFilledMultiColor(
@@ -133,10 +153,10 @@ namespace DelvUIPlugin.Interface {
             var nameSize = ImGui.CalcTextSize(name);
             DrawOutlinedText(name, new Vector2(cursorPos.X + TargetBarWidth - nameSize.X - 5, cursorPos.Y - 22));
 
-            DrawTargetOfTargetBar(target.TargetActorID);
+            DrawTargetOfTargetBar(target.TargetObjectId);
         }
         protected virtual void DrawFocusBar() {
-            var focus = PluginInterface.ClientState.Targets.FocusTarget;
+            var focus = TargetManager.FocusTarget;
             if (focus is null) {
                 return;
             }
@@ -146,7 +166,7 @@ namespace DelvUIPlugin.Interface {
             ImGui.SetCursorPos(cursorPos);  
             var drawList = ImGui.GetWindowDrawList();
             
-            if (!(focus is Chara actor)) {
+            if (focus is not Character actor) {
                 var friendly = PluginConfiguration.NPCColorMap["friendly"];
                 drawList.AddRectFilled(cursorPos, cursorPos + barSize, friendly["background"]);
                 drawList.AddRectFilledMultiColor(
@@ -175,16 +195,16 @@ namespace DelvUIPlugin.Interface {
             
         }
         
-        protected virtual void DrawTargetOfTargetBar(int targetActorId) {
-            Actor target = null;
+        protected virtual void DrawTargetOfTargetBar(uint targetActorId) {
+            GameObject target = null;
             
             for (var i = 0; i < 200; i += 2) {
-                if (PluginInterface.ClientState.Actors[i]?.ActorId == targetActorId) {
-                    target = PluginInterface.ClientState.Actors[i];
+                if (ObjectTable[i]?.ObjectId == targetActorId) {
+                    target = ObjectTable[i];
                 }
             }
             
-            if (!(target is Chara actor)) {
+            if (target is not Character actor) {
                 return;
             }
 
@@ -211,14 +231,14 @@ namespace DelvUIPlugin.Interface {
                 drawList.AddRect(cursorPos, cursorPos + barSize, 0xFF000000);
                 
                 if (ImGui.IsItemClicked()) {
-                    PluginInterface.ClientState.Targets.SetCurrentTarget(target);
+                    TargetManager.SetTarget(target);
                 }
             }
             
             ImGui.EndChild();
         }
 
-        protected Dictionary<string, uint> DetermineTargetPlateColors(Chara actor) {
+        protected Dictionary<string, uint> DetermineTargetPlateColors(Character actor) {
             var colors = PluginConfiguration.NPCColorMap["neutral"];
             
             // Still need to figure out the "orange" state; aggroed but not yet attacked.
@@ -278,7 +298,7 @@ namespace DelvUIPlugin.Interface {
         }
         
         public void Draw() {
-            if (!ShouldBeVisible() || PluginInterface.ClientState.LocalPlayer == null) {
+            if (!ShouldBeVisible() || ClientState.LocalPlayer == null) {
                 return;
             }
 
@@ -315,11 +335,11 @@ namespace DelvUIPlugin.Interface {
                 return true;
             }
 
-            var parameterWidget = (AtkUnitBase*) PluginInterface.Framework.Gui.GetUiObjectByName("_ParameterWidget", 1);
-            var fadeMiddleWidget = (AtkUnitBase*) PluginInterface.Framework.Gui.GetUiObjectByName("FadeMiddle", 1);
+            var parameterWidget = (AtkUnitBase*) GameGui.GetAddonByName("_ParameterWidget", 1);
+            var fadeMiddleWidget = (AtkUnitBase*) GameGui.GetAddonByName("FadeMiddle", 1);
             
             // Display HUD only if parameter widget is visible and we're not in a fade event
-            return PluginInterface.ClientState.LocalPlayer == null || parameterWidget == null || fadeMiddleWidget == null || !parameterWidget->IsVisible || fadeMiddleWidget->IsVisible;
+            return ClientState.LocalPlayer == null || parameterWidget == null || fadeMiddleWidget == null || !parameterWidget->IsVisible || fadeMiddleWidget->IsVisible;
         }
         
         unsafe bool IsHostileMemory(BattleNpc npc)
